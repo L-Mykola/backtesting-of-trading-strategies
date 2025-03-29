@@ -10,6 +10,7 @@ class StrategyBase(ABC):
     def generate_signals(self) -> pd.DataFrame:
         """
         Generates signals for trading.
+        :return: pd Dataframe for generated signals
         """
         pass
 
@@ -17,6 +18,7 @@ class StrategyBase(ABC):
     def run_backtest(self) -> pd.DataFrame:
         """
         Launches a strategy backtest
+        :return: pd Dataframe for backtest results
         """
         pass
 
@@ -24,5 +26,6 @@ class StrategyBase(ABC):
     def get_metrics(self) -> dict:
         """
         Calculates strategy performance metrics.
+        :return: dict with strategy metrics
         """
         pass
