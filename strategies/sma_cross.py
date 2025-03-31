@@ -1,7 +1,11 @@
+import os
+from typing import Dict, List
+
 import pandas as pd
-import numpy as np
 import vectorbt as vbt
-from .base import StrategyBase
+
+from strategies.base import StrategyBase
+from core.metrics import Metrics
 
 
 class SMACrossStrategy(StrategyBase):
@@ -9,66 +13,57 @@ class SMACrossStrategy(StrategyBase):
     The strategy of crossing two moving averages (SMA Crossover).
     """
 
-    def __init__(self, price_data: pd.DataFrame, short_window: int = 10, long_window: int = 30):
+    def __init__(self, price_data: pd.DataFrame, pairs: List[str], fast_window: int = 10, slow_window: int = 30):
         super().__init__(price_data)
-        self.short_window = short_window
-        self.long_window = long_window
+        self.pairs = pairs
+        self.fast_window = fast_window
+        self.slow_window = slow_window
         self.signals = None
         self.backtest_result = None
 
-    def generate_signals(self) -> pd.DataFrame:
+    def generate_signals(self) -> Dict:
         """
         It generates signals based on the intersection of a short and a long SMA.
-        :return: pd Dataframe for generated signals
+        :return: dict for generated signals
         """
 
-        price = self.price_data['close']
-        sma_short = price.rolling(window=self.short_window, min_periods=1).mean()
-        sma_long = price.rolling(window=self.long_window, min_periods=1).mean()
-        signal = np.where(sma_short > sma_long, 1, -1)
-        self.signals = pd.DataFrame({
-            "sma_short": sma_short,
-            "sma_long": sma_long,
-            "signal": signal
-        }, index=self.price_data.index)
-        return self.signals
+        close = self.price_data.xs("close", level=1, axis=1)
+        fast_sma = close.rolling(self.fast_window).mean()
+        slow_sma = close.rolling(self.slow_window).mean()
 
-    def run_backtest(self) -> pd.DataFrame:
+        entries = fast_sma > slow_sma
+        exits = fast_sma < slow_sma
+        signals = {"entries": entries, "exits": exits}
+        return signals
+
+    def run_backtest(self) -> vbt.Portfolio:
         """
         Launches a strategy backtest
-        :return: pd Dataframe for backtest results
+        :return: vbt.Portfolio for backtest results
         """
 
-        if self.signals is None:
-            self.generate_signals()
+        signals = self.generate_signals()
 
-        price = self.price_data['close']
-        entries = self.signals['signal'] == 1
-        exits = self.signals['signal'] == -1
+        close = self.price_data.xs("close", level=1, axis=1)
+        self.backtest_result = vbt.Portfolio.from_signals(
+            close,
+            entries=signals["entries"],
+            exits=signals["exits"],
+            init_cash=10000,
+            fees=0.001,
+            slippage=0.001,
+            freq="1min"
+        )
 
-        pf = vbt.Portfolio.from_signals(price, entries, exits,
-                                        freq='1min',
-                                        init_cash=10000,
-                                        fees=0.001,
-                                        slippage=0.001)
-        self.backtest_result = pf
-        return pf.stats()
+        return self.backtest_result
 
-    def get_metrics(self) -> dict:
+    def get_metrics(self, path: os.path) -> Dict:
         """
-        Calculates strategy performance metrics.
+        Aggregate strategy performance metrics and save it to csv.
         :return: dict with strategy metrics
         """
+        metrics = Metrics(self.backtest_result, self.pairs)
+        agg_metrics = metrics.aggregate_metrics()
+        metrics.save_to_csv(agg_metrics, path)
+        return agg_metrics
 
-        if self.backtest_result is None:
-            self.run_backtest()
-        stats = self.backtest_result.stats()
-        metrics = {
-            "total_return": stats["Total Return"],
-            "sharpe_ratio": stats["Sharpe Ratio"],
-            "max_drawdown": stats["Max Drawdown"],
-            "winrate": None,  # Розрахунок winrate можна доповнити
-            "expectancy": None,  # Розрахунок expectancy можна доповнити
-            "exposure_time": None  # Розрахунок exposure_time можна доповнити
-        }
-        return metrics

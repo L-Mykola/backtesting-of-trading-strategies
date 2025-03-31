@@ -1,76 +1,74 @@
+import os
+from typing import List, Dict
+
 import pandas as pd
-import numpy as np
 import vectorbt as vbt
 import ta
-from .base import StrategyBase
+
+from strategies.base import StrategyBase
+from core.metrics import Metrics
 
 
 class RSIBBStrategy(StrategyBase):
     """
-    A strategy based on RSI with Bollinger Bands confirmation.
-    Enter when RSI < 30 and rebound from the lower boundary of BB.
+    Strategy using RSI and confirmation through Bollinger Bands.
     """
 
-    def __init__(self, price_data: pd.DataFrame, rsi_period: int = 14, bb_window: int = 20):
+    def __init__(self, pairs: List[str], price_data: pd.DataFrame, rsi_period: int = 14, bb_window: int = 20, bb_std: float = 2):
         super().__init__(price_data)
         self.rsi_period = rsi_period
         self.bb_window = bb_window
-        self.signals = None
+        self.bb_std = bb_std
+        self.pairs = pairs
         self.backtest_result = None
 
-    def generate_signals(self) -> pd.DataFrame:
+    def generate_signals(self) -> Dict:
         """
-        Generates a buy signal when the RSI < 30 and the price exceeds the lower boundary of BB
-        :return: pd Dataframe for generated signals
+        Generates signals:
+         - Entry: when RSI < 30 and the price is near the lower boundary of the Bollinger Bands.
+         - Exit: when RSI > 70 or the price is approaching the upper boundary of the Bollinger Bands.
+         :return: dict for generated signals
         """
-        price = self.price_data['close']
-        rsi = ta.momentum.RSIIndicator(price, window=self.rsi_period).rsi()
-        bb = ta.volatility.BollingerBands(price, window=self.bb_window)
-        bb_lower = bb.bollinger_lband()
+        close = self.price_data.xs("close", level=1, axis=1)
+        rsi = close.apply(lambda s: ta.momentum.RSIIndicator(s, window=self.rsi_period).rsi())
 
-        signal = np.where((rsi < 30) & (price > bb_lower), 1, -1)
-        self.signals = pd.DataFrame({
-            "rsi": rsi,
-            "bb_lower": bb_lower,
-            "signal": signal
-        }, index=self.price_data.index)
-        return self.signals
+        bb_indicator = close.rolling(self.bb_window)
+        middle_band = bb_indicator.mean()
+        std = close.rolling(self.bb_window).std()
+        lower_band = middle_band - self.bb_std * std
+        upper_band = middle_band + self.bb_std * std
 
-    def run_backtest(self) -> pd.DataFrame:
+        entries = ((rsi < 30) & (close <= lower_band * 1.01)).fillna(False)
+        exits = ((rsi > 70) | (close >= upper_band * 0.99)).fillna(False)
+
+        signals = {"entries": entries, "exits": exits}
+        return signals
+
+    def run_backtest(self) -> vbt.Portfolio:
         """
         Launches a strategy backtest
-        :return: pd Dataframe for backtest results
+        :return: vbt.Portfolio for backtest results
         """
+        signals = self.generate_signals()
+        close = self.price_data.xs("close", level=1, axis=1)
+        close = close.bfill().clip(lower=0.01)
+        self.backtest_result = vbt.Portfolio.from_signals(
+            close,
+            entries=signals["entries"],
+            exits=signals["exits"],
+            init_cash=10000,
+            fees=0.001,
+            slippage=0.001,
+            freq="1min",
+        )
+        return self.backtest_result
 
-        if self.signals is None:
-            self.generate_signals()
-
-        price = self.price_data['close']
-        entries = self.signals['signal'] == 1
-        exits = self.signals['signal'] == -1
-
-        pf = vbt.Portfolio.from_signals(price, entries, exits,
-                                        freq='1min',
-                                        init_cash=10000,
-                                        fees=0.001,
-                                        slippage=0.001)
-        self.backtest_result = pf
-        return pf.stats()
-
-    def get_metrics(self) -> dict:
+    def get_metrics(self, path: os.path) -> Dict:
         """
-        Calculates strategy performance metrics.
+        Aggregate strategy performance metrics and save it to csv.
         :return: dict with strategy metrics
         """
-        if self.backtest_result is None:
-            self.run_backtest()
-        stats = self.backtest_result.stats()
-        metrics = {
-            "total_return": stats["Total Return"],
-            "sharpe_ratio": stats["Sharpe Ratio"],
-            "max_drawdown": stats["Max Drawdown"],
-            "winrate": None,
-            "expectancy": None,
-            "exposure_time": None
-        }
-        return metrics
+        metrics = Metrics(self.backtest_result, self.pairs)
+        agg_metrics = metrics.aggregate_metrics()
+        metrics.save_to_csv(agg_metrics, path)
+        return agg_metrics

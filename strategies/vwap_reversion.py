@@ -1,83 +1,93 @@
+import os
+from typing import List, Dict
+
 import pandas as pd
-import numpy as np
 import vectorbt as vbt
-from .base import StrategyBase
+
+from strategies.base import StrategyBase
+from core.metrics import Metrics
 
 
 class VWAPReversionStrategy(StrategyBase):
     """
-    VWAP Reversion strategy.
-    Entry occurs when the price deviates significantly from VWAP with an expected return.
+    VWAP Reversion Intraday strategy.
     """
-    def __init__(self, price_data: pd.DataFrame, deviation: float = 0.01):
+
+    def __init__(self, price_data: pd.DataFrame, pairs: List[str], threshold: float = 0.01):
         super().__init__(price_data)
-        self.deviation = deviation
-        self.signals = None
+        self.pairs = pairs
+        self.threshold = threshold
         self.backtest_result = None
 
-    def calculate_vwap(self) -> pd.Series:
+    @staticmethod
+    def calculate_vwap(df: pd.DataFrame) -> pd.Series:
         """
-        Calculates VWAP.
+        Calculates the intraday VWAP for a single DataFrame of an asset.
+        :return: pd.Series for calculated VWAP
         """
+        df = df.copy()
+        df['typical_price'] = df['close']
+        df['cum_vol'] = df['volume'].cumsum()
+        df['cum_tp_vol'] = (df['typical_price'] * df['volume']).cumsum()
+        df['vwap'] = df['cum_tp_vol'] / df['cum_vol']
+        return df['vwap']
 
-        price = self.price_data['close']
-        volume = self.price_data['volume']
-        vwap = (price * volume).cumsum() / volume.cumsum()
-        return vwap
-
-    def generate_signals(self) -> pd.DataFrame:
+    def generate_signals(self) -> Dict:
         """
-        Generates a signal when the price deviates significantly from the VWAP.
-        :return: pd Dataframe for generated signals
+        Generates signals based on VWAP:
+         - Entry: when the price < VWAP * (1 - threshold).
+         - Output: when the price > VWAP * (1 + threshold).
+         :return: dict for generated signals
         """
+        close = self.price_data.xs("close", level=1, axis=1)
+        volume = self.price_data.xs("volume", level=1, axis=1)
 
-        price = self.price_data['close']
-        vwap = self.calculate_vwap()
+        # Розрахунок VWAP для кожного активу окремо
+        vwap_df = pd.DataFrame(index=close.index, columns=close.columns)
+        for col in close.columns:
+            df_asset = pd.DataFrame({
+                'close': close[col],
+                'volume': volume[col]
+            })
+            df_asset['date'] = df_asset.index.date
+            vwap_list = []
+            for date, group in df_asset.groupby('date'):
+                vwap_series = self.calculate_vwap(group)
+                vwap_list.append(vwap_series)
+            vwap_asset = pd.concat(vwap_list)
+            vwap_df[col] = vwap_asset.sort_index()
 
-        signal = np.where(price > vwap * (1 + self.deviation), -1,
-                          np.where(price < vwap * (1 - self.deviation), 1, 0))
-        self.signals = pd.DataFrame({
-            "vwap": vwap,
-            "signal": signal
-        }, index=self.price_data.index)
-        return self.signals
+        entries = close < vwap_df * (1 - self.threshold)
+        exits = close > vwap_df * (1 + self.threshold)
+        signals = {"entries": entries, "exits": exits}
+        return signals
 
-    def run_backtest(self) -> pd.DataFrame:
+    def run_backtest(self) -> vbt.Portfolio:
         """
         Launches a strategy backtest
-        :return: pd Dataframe for backtest results
+        :return: vbt.Portfolio for backtest results
         """
+        signals = self.generate_signals()
+        close = self.price_data.xs("close", level=1, axis=1)
+        self.backtest_result = vbt.Portfolio.from_signals(
+            close,
+            entries=signals["entries"],
+            exits=signals["exits"],
+            init_cash=10000,
+            fees=0.001,
+            slippage=0.001,
+            freq="1min"
+        )
 
-        if self.signals is None:
-            self.generate_signals()
+        return self.backtest_result
 
-        price = self.price_data['close']
-        entries = self.signals['signal'] > 0
-        exits = self.signals['signal'] < 0
-
-        pf = vbt.Portfolio.from_signals(price, entries, exits,
-                                        freq='1min',
-                                        init_cash=10000,
-                                        fees=0.001,
-                                        slippage=0.001)
-        self.backtest_result = pf
-        return pf.stats()
-
-    def get_metrics(self) -> dict:
+    def get_metrics(self, path: os.path) -> Dict:
         """
-        Calculates strategy performance metrics.
+        Aggregate strategy performance metrics and save it to csv.
         :return: dict with strategy metrics
         """
+        metrics = Metrics(self.backtest_result, self.pairs)
+        agg_metrics = metrics.aggregate_metrics()
+        metrics.save_to_csv(agg_metrics, path)
+        return agg_metrics
 
-        if self.backtest_result is None:
-            self.run_backtest()
-        stats = self.backtest_result.stats()
-        metrics = {
-            "total_return": stats["Total Return"],
-            "sharpe_ratio": stats["Sharpe Ratio"],
-            "max_drawdown": stats["Max Drawdown"],
-            "winrate": None,
-            "expectancy": None,
-            "exposure_time": None
-        }
-        return metrics

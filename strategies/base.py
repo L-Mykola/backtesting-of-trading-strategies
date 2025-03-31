@@ -1,5 +1,9 @@
+import os
 from abc import ABC, abstractmethod
+from typing import Dict
+
 import pandas as pd
+import vectorbt as vbt
 
 
 class StrategyBase(ABC):
@@ -7,7 +11,7 @@ class StrategyBase(ABC):
         self.price_data = price_data
 
     @abstractmethod
-    def generate_signals(self) -> pd.DataFrame:
+    def generate_signals(self) -> Dict:
         """
         Generates signals for trading.
         :return: pd Dataframe for generated signals
@@ -15,7 +19,7 @@ class StrategyBase(ABC):
         pass
 
     @abstractmethod
-    def run_backtest(self) -> pd.DataFrame:
+    def run_backtest(self) -> vbt.Portfolio:
         """
         Launches a strategy backtest
         :return: pd Dataframe for backtest results
@@ -23,7 +27,7 @@ class StrategyBase(ABC):
         pass
 
     @abstractmethod
-    def get_metrics(self) -> dict:
+    def get_metrics(self, path: os.path) -> Dict:
         """
         Calculates strategy performance metrics.
         :return: dict with strategy metrics
