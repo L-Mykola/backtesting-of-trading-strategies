@@ -1,6 +1,6 @@
 import os
 import time
-from pprint import pprint
+from typing import List, Tuple
 
 import pandas as pd
 import ccxt
@@ -8,6 +8,7 @@ from loguru import logger
 
 
 class DataLoader:
+
     def __init__(self, project_dir: os.path, start_date: str, end_date: str, data_dir: str = "data"):
         self.project_dir = project_dir
         self.data_dir = data_dir
@@ -17,8 +18,9 @@ class DataLoader:
         self.exchange = ccxt.binance({
             'enableRateLimit': True,
         })
+        self.pairs = []
 
-    def get_top_liquid_pairs(self, n: int = 100) -> list:
+    def get_top_liquid_pairs(self, n) -> list:
         """
         Gets the top n liquid pairs to BTC using ticker data from Binance
         :param n: num of pairs
@@ -34,13 +36,14 @@ class DataLoader:
                     btc_pairs.append((symbol, ticker['quoteVolume']))
         btc_pairs = sorted(btc_pairs, key=lambda x: x[1], reverse=True)
         top_pairs = [pair[0] for pair in btc_pairs[:n]]
+        self.pairs = top_pairs.copy()
         return top_pairs
 
     def fetch_ohlcv_for_symbol(self, symbol: str, timeframe: str = '1m') -> pd.DataFrame:
         """
         Downloads OHLCV data for a given trading pair for a specified period.
-        :param symbol: num of pairs
-        :param timeframe: num of pairs
+        :param symbol: symbol
+        :param timeframe: timeframe
         :return: dataframe of OHLCV data for a given trading pair for a specified period
         """
         since = int(self.start_date.timestamp() * 1000)
@@ -51,6 +54,7 @@ class DataLoader:
                 ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=1000)
             except Exception as e:
                 logger.error(f"Error loading data for {symbol}: {e}")
+                self.pairs.remove(symbol)
                 break
             if not ohlcv:
                 break
@@ -60,15 +64,21 @@ class DataLoader:
                 break
             since = last_timestamp + 1
             time.sleep(self.exchange.rateLimit / 1000)
+
+        complete_index = pd.date_range(self.start_date, self.end_date, freq='min')
+
         if not all_ohlcv:
             raise ValueError(f"Could not load data for {symbol}")
+
         df = pd.DataFrame(all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
         df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms")
         df.set_index("datetime", inplace=True)
         df.drop(columns=["timestamp"], inplace=True)
+        df = df.reindex(complete_index)
+        df.fillna(0, inplace=True)
         return df
 
-    def download_data(self, n: int = 100) -> pd.DataFrame:
+    def download_data(self, n) -> pd.DataFrame:
         """
         Uploads data for the top 100 pairs to BTC and returns a summary DataFrame with multi-index columns
         :param n: num of pairs
@@ -85,6 +95,7 @@ class DataLoader:
                 data_frames.append(df)
             except Exception as e:
                 logger.error(f"Missing {symbol} through the error: {e}")
+                self.pairs.remove(symbol)
         if data_frames:
             combined = pd.concat(data_frames, axis=1)
             combined.sort_index(inplace=True)
@@ -123,21 +134,22 @@ class DataLoader:
         """
         return not df.isnull().any().any()
 
-    def process(self, filename: str = "btc_1m_feb25.parquet") -> pd.DataFrame:
+    def process(self, num_of_pairs: int, filename: str = "btc_1m_feb25.parquet") -> Tuple[List, pd.DataFrame]:
         """
         The main method for downloading, processing, and caching data.
+        :param num_of_pairs: number of pairs
         :param filename: name of cache file
         :return: result pandas dataframe
         """
         cached_df = self.load_cached_data(filename)
         if cached_df is not None and self.check_data_integrity(cached_df):
-            logger.info()
+            logger.info("Use data from the cache!")
             return cached_df
 
-        df = self.download_data()
+        df = self.download_data(num_of_pairs)
         if not self.check_data_integrity(df):
             raise ValueError("Data has integrity issues.")
         self.save_data(df, filename)
-        return df
+        return self.pairs, df
 
 
