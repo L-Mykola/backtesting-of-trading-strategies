@@ -144,7 +144,9 @@ class DataLoader:
         cached_df = self.load_cached_data(filename)
         if cached_df is not None and self.check_data_integrity(cached_df):
             logger.info("Use data from the cache!")
-            return cached_df
+            pairs = cached_df.columns.get_level_values(0).unique().tolist()
+            logger.info(f"Pairs: {pairs}")
+            return pairs, cached_df
 
         df = self.download_data(num_of_pairs)
         if not self.check_data_integrity(df):

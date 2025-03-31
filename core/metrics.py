@@ -44,10 +44,10 @@ class Metrics:
         aggregated = {
             "Total Return": self.portfolio.stats(agg_func=np.mean, silence_warnings=True)['Total Return [%]'],
             "Sharpe Ratio": sharpe_ratio_sum/len(self.pairs),
-            "Max Drawdown": self.portfolio.stats(agg_func=np.mean, silence_warnings=True)['Max Drawdown [%]'],
-            "Win Rate": self.portfolio.stats(agg_func=np.mean, silence_warnings=True)['Win Rate [%]'],
+            "Max Drawdown %": self.portfolio.stats(agg_func=np.mean, silence_warnings=True)['Max Drawdown [%]'],
+            "Win Rate %": self.portfolio.stats(agg_func=np.mean, silence_warnings=True)['Win Rate [%]'],
             "Expectancy": self.portfolio.stats(agg_func=np.mean, silence_warnings=True)['Expectancy'],
-            "Exposure Time": agg_exposure
+            "Exposure Time %": agg_exposure
         }
 
         return aggregated
