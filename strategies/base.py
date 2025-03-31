@@ -14,7 +14,7 @@ class StrategyBase(ABC):
     def generate_signals(self) -> Dict:
         """
         Generates signals for trading.
-        :return: pd Dataframe for generated signals
+        :return: dict for generated signals
         """
         pass
 
@@ -22,14 +22,14 @@ class StrategyBase(ABC):
     def run_backtest(self) -> vbt.Portfolio:
         """
         Launches a strategy backtest
-        :return: pd Dataframe for backtest results
+        :return: vbt.Portfolio for backtest results
         """
         pass
 
     @abstractmethod
     def get_metrics(self, path: os.path) -> Dict:
         """
-        Calculates strategy performance metrics.
+        Aggregate strategy performance metrics and save it to csv.
         :return: dict with strategy metrics
         """
         pass
